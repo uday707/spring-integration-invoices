@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:int="http://www.springframework.org/schema/integration" 
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd 
+       http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd">
+
+    <!--  Interpret the every message and log it -->
+    <int:logging-channel-adapter id="logger" level="DEBUG" />
+    <!--  <int:wire-tap channel="logger" /> -->
+    
+    <!--  Defining the Gateway to collect the Invoices -->
+    <int:channel id="newInvoicesChannel" />
+    <int:gateway service-interface="com.rbsfm.invoices.InvoiceCollectorGateway" id="invoicesGateway"
+       default-request-channel="newInvoicesChannel"/>
+    
+    <!-- Defining the splitter to break the collection of invoices into single channel invoice -->
+    <int:channel id="singleInvoiceChannel" />
+    <int:splitter input-channel="newInvoicesChannel"
+                  output-channel="singleInvoiceChannel" />
+    
+    <!-- Filtering the some invoices -->
+    <int:filter input-channel="singleInvoiceChannel"
+                output-channel="filteredInvoiceChannel"
+                ref="invoiceFilter" />
+    <int:channel id="filteredInvoiceChannel" />            
+    
+    <!--  Routing the invoices on the basis of account information using the 
+          Spring expression language. -->
+     <int:recipient-list-router input-channel="filteredInvoiceChannel">
+           <int:recipient channel="foreignTransactions" selector-expression="payload.foreign" />
+           <int:recipient channel="localTransactions" selector-expression="!payload.foreign" />
+     </int:recipient-list-router>     
+     
+     <int:channel id="foreignTransactions" />
+     <int:channel id="localTransactions" />
+     
+     <!--  Transforming the invoices into the payments based upon the account's nature -->
+     <int:transformer
+          input-channel="localTransactions"
+          output-channel="bankingChannel"
+          ref="localPaymentCreator" />
+          
+     <int:transformer
+          input-channel="foreignTransaction" 
+          output-channel="bankingChannel"
+          ref="foreignPaymentCreator" />
+     <int:channel id="bankingChannel">
+         <int:queue capacity="1000" />
+     </int:channel>
+     
+     <!--  Service Activator to activate the message sending to the 
+           appropriate sender  -->
+     <int:service-activator input-channel="bankingChannel" ref="paymentProcessor" >
+        <int:poller fixed-rate="500" error-channel="failPaymentsChannel" />
+     </int:service-activator>
+     <int:channel id="failPaymentsChannel" />
+     
+     <!--  Service Activator to route the payments in failed payments 
+           to proper service activator -->
+     <int:service-activator input-channel="failPaymentsChannel" 
+           ref="failPaymentsHandler" />
+</beans>
